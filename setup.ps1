@@ -263,7 +263,7 @@ if (Get-Command ollama -ErrorAction SilentlyContinue) {
     }
 }
 
-# 6. Spin up Docker Postgres & Run database.py migrations
+# 6. Spin up Docker Postgres & Run database.py migrations/restores
 Write-Header "Launching Infrastructure Containers"
 try {
     Write-Host "Starting PostgreSQL database container..." -ForegroundColor Yellow
@@ -275,19 +275,53 @@ try {
     Write-Host "Waiting 6 seconds for PostgreSQL to initialize database cluster..." -ForegroundColor Yellow
     Start-Sleep -Seconds 6
     
-    Write-Host "Initializing database schema & vector indexes..." -ForegroundColor Yellow
     # Explicitly pass DB_PORT and env variables to make sure Python script connects to the right port immediately
     $env:DB_PORT = $dbPort
     $env:DB_HOST = "localhost"
     $env:DB_NAME = "rule_db"
     $env:DB_USER = "postgres"
     $env:DB_PASS = "postgres"
-    
-    & .venv\Scripts\python.exe backend/database.py
-    Write-Success "Database schema initialization complete."
+
+    # Check for backup file to restore
+    if (Test-Path "rule_db_backup.sql") {
+        Write-Host "=== Found database backup rule_db_backup.sql ===" -ForegroundColor Cyan
+        Write-Host "Restoring database from backup..." -ForegroundColor Yellow
+        Get-Content "rule_db_backup.sql" -Raw | docker exec -i postgres_vector psql -U postgres -d rule_db
+        Write-Success "Database restore complete. Skipped schema creation & rule ingestion."
+    } else {
+        Write-Host "Initializing database schema & vector indexes..." -ForegroundColor Yellow
+        & .venv\Scripts\python.exe backend/database.py
+        Write-Success "Database schema initialization complete."
+
+        Write-Host "=== Starting automatic rule ingestion (this may take a few minutes) ===" -ForegroundColor Cyan
+        & .venv\Scripts\python.exe backend/ingest.py
+        Write-Success "Rule ingestion complete."
+    }
 } catch {
     Write-ErrorMsg "Failed to spin up database container or run migrations: $_"
     exit 1
+}
+
+# 7. Register Scheduled Task in Windows Task Scheduler
+Write-Header "Registering Scheduled Rule Update Task (2:00 AM daily check)"
+try {
+    $taskName = "RuleDatabaseAutoUpdate"
+    $cronScriptPath = Resolve-Path "cron_sync.ps1"
+    
+    # Trigger daily at 2:00 AM
+    $trigger = New-ScheduledTaskTrigger -Daily -At "2:00 AM"
+    
+    # Action executes powershell with hidden window running our cron script
+    $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$cronScriptPath`""
+    
+    # Settings: wake computer, run as soon as possible after missed start
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -WakeToRun
+    
+    # Register the task
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Force -ErrorAction SilentlyContinue | Out-Null
+    Write-Success "Task Scheduler registered successfully: '$taskName' (runs cron_sync.ps1 daily at 2:00 AM)."
+} catch {
+    Write-WarningMsg "Could not register Task Scheduler automatically. You can register cron_sync.ps1 manually if desired."
 }
 
 # Final Summary instructions

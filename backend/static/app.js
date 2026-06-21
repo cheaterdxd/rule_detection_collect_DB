@@ -4,6 +4,8 @@ let activeTag = null;
 let currentRule = null;
 let currentTranslationCache = {};
 let currentOffset = 0;
+let currentTags = [];
+let syncInterval = null;
 const PAGE_LIMIT = 60;
 
 // Elements
@@ -27,6 +29,17 @@ const modalRuleDesc = document.getElementById('modal-rule-desc');
 const codeTabs = document.getElementById('code-tabs');
 const codeDisplay = document.getElementById('code-display');
 const copyCodeBtn = document.getElementById('copy-code-btn');
+
+// Settings Elements
+const settingsModal = document.getElementById('settings-modal');
+const settingsBtn = document.getElementById('settings-btn');
+const closeSettingsBtn = document.getElementById('close-settings-btn');
+const sourcesList = document.getElementById('sources-list');
+const addSourceForm = document.getElementById('add-source-form');
+const syncNowBtn = document.getElementById('sync-now-btn');
+const syncStatusMsg = document.getElementById('sync-status-msg');
+const addTagInput = document.getElementById('add-tag-input');
+const addTagBtn = document.getElementById('add-tag-btn');
 
 // Start Init
 document.addEventListener('DOMContentLoaded', () => {
@@ -98,6 +111,47 @@ function setupEventListeners() {
             searchRules(query, true);
         });
     }
+
+    // Settings Modal Listeners
+    settingsBtn.addEventListener('click', () => {
+        loadSources();
+        pollSyncStatus(); // check current sync status on load
+        settingsModal.style.display = 'flex';
+    });
+    closeSettingsBtn.addEventListener('click', closeSettings);
+    window.addEventListener('click', (e) => {
+        if (e.target === settingsModal) closeSettings();
+    });
+
+    // Add Source Form Submit
+    addSourceForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const extensions = document.getElementById('source-extensions').value
+            .split(',')
+            .map(ext => ext.trim())
+            .filter(ext => ext.length > 0);
+            
+        const sourceData = {
+            name: document.getElementById('source-name').value.trim(),
+            type: document.getElementById('source-type').value,
+            repo_url: document.getElementById('source-url').value.trim(),
+            relative_rules_path: document.getElementById('source-rules-path').value.trim(),
+            target_extensions: extensions
+        };
+        addSource(sourceData);
+    });
+
+    // Sync Now Trigger
+    syncNowBtn.addEventListener('click', triggerSync);
+
+    // Tag Editor Inputs
+    addTagBtn.addEventListener('click', addRuleTag);
+    addTagInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            addRuleTag();
+        }
+    });
 }
 
 // Ingest current filters and hit search endpoint
@@ -277,30 +331,15 @@ function renderRulesFeed(rules, append = false) {
     }
 
     rules.forEach(rule => {
-        // Format severity class name
         const lvl = (rule.level || 'medium').toLowerCase();
-        let levelClass = 'level-medium';
-        let cardSevClass = 'sev-medium';
-        if (lvl === 'critical') {
-            levelClass = 'level-critical';
-            cardSevClass = 'sev-critical';
-        } else if (lvl === 'high') {
-            levelClass = 'level-high';
-            cardSevClass = 'sev-high';
-        } else if (lvl === 'low' || lvl === 'informational' || lvl === 'info') {
-            levelClass = 'level-low';
-            cardSevClass = 'sev-low';
-        }
+        const levelClass = getLevelClass(lvl);
+        const cardSevClass = getCardSevClass(lvl);
 
         const card = document.createElement('div');
         card.className = `rule-card ${cardSevClass}`;
         card.addEventListener('click', () => openRuleInspector(rule.id));
 
-        // Badge type
-        let typeBadgeClass = 'sigma-badge';
-        if (rule.type === 'Yara') typeBadgeClass = 'yara-badge';
-        else if (rule.type === 'Elastic') typeBadgeClass = 'elastic-badge';
-        else if (rule.type === 'KQL') typeBadgeClass = 'kql-badge';
+        const typeBadgeClass = getBadgeClass(rule.type);
 
         // Score logic
         let scoreDisplay = '';
@@ -347,22 +386,12 @@ async function openRuleInspector(ruleId) {
         modalRuleType.textContent = currentRule.type;
         
         // Remove old badge classes and apply new
-        modalRuleType.className = 'badge';
-        let typeBadgeClass = 'sigma-badge';
-        if (currentRule.type === 'Yara') typeBadgeClass = 'yara-badge';
-        else if (currentRule.type === 'Elastic') typeBadgeClass = 'elastic-badge';
-        else if (currentRule.type === 'KQL') typeBadgeClass = 'kql-badge';
-        modalRuleType.classList.add(typeBadgeClass);
+        modalRuleType.className = `badge ${getBadgeClass(currentRule.type)}`;
 
         // Severity
         const lvl = (currentRule.level || 'medium').toLowerCase();
         modalRuleLevel.textContent = lvl;
-        modalRuleLevel.className = 'level-pill';
-        let levelClass = 'level-medium';
-        if (lvl === 'critical') levelClass = 'level-critical';
-        else if (lvl === 'high') levelClass = 'level-high';
-        else if (lvl === 'low' || lvl === 'informational') levelClass = 'level-low';
-        modalRuleLevel.classList.add(levelClass);
+        modalRuleLevel.className = `level-pill ${getLevelClass(lvl)}`;
 
         // Metadata
         modalRuleAuthor.textContent = currentRule.author || 'Unknown';
@@ -370,17 +399,7 @@ async function openRuleInspector(ruleId) {
         modalRuleDesc.textContent = currentRule.description || 'No description available.';
 
         // Render Tags
-        modalRuleTags.innerHTML = '';
-        if (currentRule.tags && currentRule.tags.length > 0) {
-            currentRule.tags.forEach(tag => {
-                const tagEl = document.createElement('span');
-                tagEl.className = 'tag-pill';
-                tagEl.textContent = tag;
-                modalRuleTags.appendChild(tagEl);
-            });
-        } else {
-            modalRuleTags.innerHTML = '<span class="tag-loading">No tags</span>';
-        }
+        renderTagsEditor(currentRule.tags);
 
         // Translation Tabs visibility: ONLY Sigma rules can be translated to Splunk/KQL/Elastic
         const tabSplunk = document.getElementById('tab-splunk');
@@ -484,4 +503,263 @@ function escapeHtml(str) {
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&#039;");
+}
+
+// --- Tag Editor Helpers ---
+function renderTagsEditor(tags) {
+    currentTags = tags || [];
+    modalRuleTags.innerHTML = '';
+    if (currentTags.length > 0) {
+        currentTags.forEach(tag => {
+            const tagEl = document.createElement('span');
+            tagEl.className = 'tag-pill';
+            tagEl.innerHTML = `${escapeHtml(tag)} <span class="delete-tag-btn" data-tag="${escapeHtml(tag)}">&times;</span>`;
+            tagEl.querySelector('.delete-tag-btn').addEventListener('click', (e) => {
+                e.stopPropagation();
+                removeRuleTag(tag);
+            });
+            modalRuleTags.appendChild(tagEl);
+        });
+    } else {
+        modalRuleTags.innerHTML = '<span class="tag-loading">No tags</span>';
+    }
+}
+
+async function addRuleTag() {
+    const val = addTagInput.value.trim();
+    if (!val || !currentRule) return;
+    
+    if (currentTags.includes(val)) {
+        addTagInput.value = '';
+        return;
+    }
+    
+    const updatedTags = [...currentTags, val];
+    
+    try {
+        const response = await fetch(`/api/rules/${currentRule.id}/tags`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tags: updatedTags })
+        });
+        if (!response.ok) throw new Error('Failed to add tag');
+        
+        currentTags = updatedTags;
+        renderTagsEditor(currentTags);
+        addTagInput.value = '';
+        
+        // Refresh rule feed to reflect tags
+        loadStats();
+    } catch (e) {
+        console.error(e);
+        alert('Failed to save tag to rule.');
+    }
+}
+
+async function removeRuleTag(tagToRemove) {
+    if (!currentRule) return;
+    const updatedTags = currentTags.filter(t => t !== tagToRemove);
+    
+    try {
+        const response = await fetch(`/api/rules/${currentRule.id}/tags`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tags: updatedTags })
+        });
+        if (!response.ok) throw new Error('Failed to remove tag');
+        
+        currentTags = updatedTags;
+        renderTagsEditor(currentTags);
+        
+        // Refresh rule feed to reflect tags
+        loadStats();
+    } catch (e) {
+        console.error(e);
+        alert('Failed to remove tag.');
+    }
+}
+
+// --- Settings and Repository Source Config Helpers ---
+async function loadSources() {
+    sourcesList.innerHTML = '<div style="font-size:0.85rem; color:var(--text-muted);">Loading rule sources...</div>';
+    try {
+        const response = await fetch('/api/sources');
+        if (!response.ok) throw new Error('Failed to load sources');
+        const sources = await response.json();
+        
+        sourcesList.innerHTML = '';
+        if (sources.length === 0) {
+            sourcesList.innerHTML = '<div style="font-size:0.85rem; color:var(--text-muted);">No configured repositories.</div>';
+            return;
+        }
+        
+        sources.forEach(source => {
+            const item = document.createElement('div');
+            item.className = 'source-item';
+            
+            const typeBadgeClass = getBadgeClass(source.type);
+            
+            item.innerHTML = `
+                <div class="source-info">
+                    <div class="source-title">
+                        <span class="badge ${typeBadgeClass}">${source.type}</span>
+                        <span>${escapeHtml(source.name)}</span>
+                    </div>
+                    <div class="source-meta">
+                        <strong>Git:</strong> ${escapeHtml(source.repo_url)}<br>
+                        <strong>Path:</strong> ${escapeHtml(source.relative_rules_path)} (Exts: ${source.target_extensions.join(', ')})
+                    </div>
+                </div>
+                <button type="button" class="delete-source-btn" title="Delete Repository Source" data-name="${escapeHtml(source.name)}">
+                    <i class="fa-solid fa-trash-can"></i>
+                </button>
+            `;
+            
+            item.querySelector('.delete-source-btn').addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (confirm(`Are you sure you want to delete source '${source.name}'?`)) {
+                    deleteSource(source.name);
+                }
+            });
+            
+            sourcesList.appendChild(item);
+        });
+    } catch (e) {
+        console.error(e);
+        sourcesList.innerHTML = '<div style="color:var(--color-critical); font-size:0.85rem;">Failed to load sources config.</div>';
+    }
+}
+
+async function addSource(sourceData) {
+    try {
+        const response = await fetch('/api/sources', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(sourceData)
+        });
+        if (!response.ok) {
+            const err = await response.json();
+            throw new Error(err.detail || 'Failed to add source');
+        }
+        
+        // Reset form
+        addSourceForm.reset();
+        // Reload list
+        loadSources();
+        loadStats(); // refresh database counts
+    } catch (e) {
+        console.error(e);
+        alert(`Error: ${e.message}`);
+    }
+}
+
+async function deleteSource(name) {
+    try {
+        const response = await fetch(`/api/sources/${encodeURIComponent(name)}`, {
+            method: 'DELETE'
+        });
+        if (!response.ok) throw new Error('Failed to delete source');
+        
+        loadSources();
+        loadStats(); // refresh database counts
+    } catch (e) {
+        console.error(e);
+        alert('Failed to delete repository source.');
+    }
+}
+
+// --- Ingest Subprocess Sync Helpers ---
+async function triggerSync() {
+    syncNowBtn.disabled = true;
+    syncNowBtn.innerHTML = '<i class="fa-solid fa-rotate fa-spin"></i> Triggering Sync...';
+    syncStatusMsg.innerHTML = 'Sending sync request...';
+    
+    try {
+        const response = await fetch('/api/sources/sync', { method: 'POST' });
+        if (!response.ok) throw new Error('Failed to trigger sync');
+        
+        const data = await response.json();
+        syncStatusMsg.innerHTML = data.message;
+        
+        // Start polling immediately
+        pollSyncStatus();
+    } catch (e) {
+        console.error(e);
+        syncStatusMsg.innerHTML = `<span style="color:var(--color-critical);">Failed to start sync: ${e.message}</span>`;
+        syncNowBtn.disabled = false;
+        syncNowBtn.innerHTML = '<i class="fa-solid fa-rotate"></i> Sync Repositories Now';
+    }
+}
+
+async function pollSyncStatus() {
+    if (syncInterval) clearInterval(syncInterval);
+    
+    const checkStatus = async () => {
+        try {
+            const response = await fetch('/api/sources/sync/status');
+            if (!response.ok) throw new Error('Failed to fetch status');
+            const data = await response.json();
+            
+            if (data.status === 'running') {
+                syncNowBtn.disabled = true;
+                syncNowBtn.innerHTML = '<i class="fa-solid fa-rotate fa-spin"></i> Syncing...';
+                syncStatusMsg.innerHTML = `<span style="color:var(--color-medium); font-weight:600;"><i class="fa-solid fa-spinner fa-spin"></i> Running Ingest:</span> ${escapeHtml(data.message)}`;
+            } else {
+                // Not running (idle, success, error)
+                syncNowBtn.disabled = false;
+                syncNowBtn.innerHTML = '<i class="fa-solid fa-rotate"></i> Sync Repositories Now';
+                
+                if (data.status === 'success') {
+                    syncStatusMsg.innerHTML = `<span style="color:var(--color-low); font-weight:600;"><i class="fa-solid fa-check-circle"></i> Success:</span> ${escapeHtml(data.message)}`;
+                    loadStats(); // reload stats since rules count changed
+                    if (syncInterval) clearInterval(syncInterval);
+                } else if (data.status === 'error') {
+                    syncStatusMsg.innerHTML = `<span style="color:var(--color-critical); font-weight:600;"><i class="fa-solid fa-exclamation-triangle"></i> Error:</span> ${escapeHtml(data.message)}`;
+                    if (syncInterval) clearInterval(syncInterval);
+                } else {
+                    syncStatusMsg.innerHTML = escapeHtml(data.message);
+                    if (syncInterval) clearInterval(syncInterval);
+                }
+            }
+        } catch (e) {
+            console.error('Error polling status:', e);
+            if (syncInterval) clearInterval(syncInterval);
+        }
+    };
+    
+    // Check once immediately
+    await checkStatus();
+    // Poll every 3 seconds
+    syncInterval = setInterval(checkStatus, 3000);
+}
+
+// --- Common Helper Functions ---
+function getBadgeClass(type) {
+    const badgeClasses = {
+        Yara: 'yara-badge',
+        Elastic: 'elastic-badge',
+        KQL: 'kql-badge'
+    };
+    return badgeClasses[type] || 'sigma-badge';
+}
+
+function getLevelClass(lvl) {
+    lvl = (lvl || 'medium').toLowerCase();
+    if (lvl === 'critical') return 'level-critical';
+    if (lvl === 'high') return 'level-high';
+    if (lvl === 'low' || lvl === 'informational' || lvl === 'info') return 'level-low';
+    return 'level-medium';
+}
+
+function getCardSevClass(lvl) {
+    lvl = (lvl || 'medium').toLowerCase();
+    if (lvl === 'critical') return 'sev-critical';
+    if (lvl === 'high') return 'sev-high';
+    if (lvl === 'low' || lvl === 'informational' || lvl === 'info') return 'sev-low';
+    return 'sev-medium';
+}
+
+function closeSettings() {
+    settingsModal.style.display = 'none';
+    if (syncInterval) clearInterval(syncInterval);
 }

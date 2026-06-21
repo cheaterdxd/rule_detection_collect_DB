@@ -279,7 +279,7 @@ if command -v ollama &> /dev/null; then
     write_success "AI Embedding model is ready."
 fi
 
-# 8. Spin up PostgreSQL container & run migrations
+# 8. Spin up PostgreSQL container & run migrations/restores
 write_header "Launching Infrastructure Containers"
 write_warning "Starting PostgreSQL database container..."
 $SUDO_DOCKER $DOCKER_COMPOSE_CMD down --remove-orphans >/dev/null 2>&1 || true
@@ -289,10 +289,37 @@ write_success "PostgreSQL pgvector container started."
 write_warning "Waiting 6 seconds for PostgreSQL to initialize..."
 sleep 6
 
-write_warning "Running database migrations..."
-# Inject port directly for the migration process
-DB_PORT=$db_port DB_HOST=localhost DB_NAME=rule_db DB_USER=postgres DB_PASS=postgres .venv/bin/python3 backend/database.py
-write_success "Database schema initialized successfully."
+# Check for backup file to restore
+if [ -f rule_db_backup.sql ]; then
+    write_header "Restoring database from backup"
+    write_warning "Restoring database from rule_db_backup.sql..."
+    cat rule_db_backup.sql | $SUDO_DOCKER docker exec -i postgres_vector psql -U postgres -d rule_db
+    write_success "Database restore complete. Skipped schema creation & rule ingestion."
+else
+    write_warning "Running database migrations..."
+    DB_PORT=$db_port DB_HOST=localhost DB_NAME=rule_db DB_USER=postgres DB_PASS=postgres .venv/bin/python3 backend/database.py
+    write_success "Database schema initialized successfully."
+
+    write_header "Starting automatic rule ingestion (this may take a few minutes)"
+    DB_PORT=$db_port DB_HOST=localhost DB_NAME=rule_db DB_USER=postgres DB_PASS=postgres .venv/bin/python3 backend/ingest.py
+    write_success "Rule ingestion complete."
+fi
+
+# 9. Register Cron Job on Linux
+write_header "Registering Scheduled Cron Job (2:00 AM daily check)"
+if command -v crontab &>/dev/null; then
+    CRON_SCRIPT_PATH="$(pwd)/cron_sync.sh"
+    chmod +x "$CRON_SCRIPT_PATH"
+    
+    if crontab -l 2>/dev/null | grep -q "cron_sync.sh"; then
+        write_success "Cron job is already registered."
+    else
+        (crontab -l 2>/dev/null || true; echo "0 2 * * * \"$CRON_SCRIPT_PATH\" >/dev/null 2>&1") | crontab -
+        write_success "Cron job registered successfully: '0 2 * * * $CRON_SCRIPT_PATH'."
+    fi
+else
+    write_warning "crontab utility not found. Please register cron_sync.sh manually in your scheduler."
+fi
 
 # Final Summary Instructions
 write_header "Setup Completed Successfully!"

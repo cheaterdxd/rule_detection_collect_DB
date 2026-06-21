@@ -4,34 +4,49 @@
     "type": "Sigma",
     "repo_url": "https://github.com/SigmaHQ/sigma.git",
     "relative_rules_path": "rules",
-    "target_extensions": [".yml", ".yaml"]
+    "target_extensions": [
+      ".yml",
+      ".yaml"
+    ]
   },
   {
     "name": "mdecrevoisier Advanced Sigma",
     "type": "Sigma",
     "repo_url": "https://github.com/mdecrevoisier/SIGMA-detection-rules.git",
     "relative_rules_path": "rules",
-    "target_extensions": [".yml", ".yaml"]
+    "target_extensions": [
+      ".yml",
+      ".yaml"
+    ]
   },
   {
     "name": "Signature Base YARA Rules",
     "type": "Yara",
     "repo_url": "https://github.com/Neo23x0/signature-base.git",
     "relative_rules_path": "yara",
-    "target_extensions": [".yar", ".yara"]
+    "target_extensions": [
+      ".yar",
+      ".yara"
+    ]
   },
   {
     "name": "Elastic Security Rules",
     "type": "Elastic",
     "repo_url": "https://github.com/elastic/detection-rules.git",
     "relative_rules_path": "rules",
-    "target_extensions": [".toml"]
+    "target_extensions": [
+      ".toml"
+    ]
   },
   {
     "name": "Bert-JanP Microsoft Sentinel KQL",
     "type": "KQL",
     "repo_url": "https://github.com/Bert-JanP/Hunting-Queries-Detection-Rules.git",
     "relative_rules_path": "Defender Detection Rules",
-    "target_extensions": [".yaml", ".yml", ".kql"]
+    "target_extensions": [
+      ".yaml",
+      ".yml",
+      ".kql"
+    ]
   }
 ]

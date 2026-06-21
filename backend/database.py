@@ -1,6 +1,50 @@
 import os
 import psycopg2
+import requests
+import subprocess
 from psycopg2.extras import RealDictCursor
+
+def get_windows_host_ip():
+    """Fetches the IP address of the Windows Host from inside WSL to connect to Windows services."""
+    try:
+        # Check default route in Linux to find the Hyper-V network gateway IP
+        result = subprocess.run(
+            ["ip", "route"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True
+        )
+        for line in result.stdout.splitlines():
+            if "default" in line:
+                parts = line.split()
+                if len(parts) >= 3:
+                    return parts[2]
+    except Exception as e:
+        print(f"Could not determine Windows host IP from WSL: {e}")
+    return "localhost"
+
+# Resolve Ollama configuration
+OLLAMA_HOST = os.getenv("OLLAMA_HOST") or get_windows_host_ip()
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "all-minilm")
+
+def get_ollama_embedding(text, model=OLLAMA_MODEL, host=OLLAMA_HOST):
+    """Generates a 384-dimensional vector embedding using the local Ollama service on Windows."""
+    # Truncate prompt to 500 characters to prevent context window overflow (HTTP 500 errors) in Ollama
+    truncated_text = text[:500] if text else ""
+    url = f"http://{host}:11434/api/embeddings"
+    payload = {
+        "model": model,
+        "prompt": truncated_text
+    }
+    try:
+        response = requests.post(url, json=payload, timeout=30)
+        response.raise_for_status()
+        return response.json()["embedding"]
+    except Exception as e:
+        print(f"\n[ERROR] Failed to query Ollama API at {url}")
+        print("Please ensure:")
+        print("1. Ollama is running on your Windows machine.")
+        print("2. You downloaded the model using: 'ollama pull all-minilm'")
+        print("3. Ollama is configured to accept network connections by setting the environment variable")
+        print("   OLLAMA_HOST=0.0.0.0 on Windows before launching Ollama Desktop.")
+        raise e
 
 def load_env():
     """Loads environment variables from a local .env file if it exists."""

@@ -4,57 +4,15 @@ import json
 import uuid
 import yaml
 import tomli
-import requests
 import subprocess
 from datetime import datetime
-from database import get_db_connection, init_db
+from database import get_db_connection, init_db, get_ollama_embedding, OLLAMA_HOST, OLLAMA_MODEL
 
 # Configure Cache Directory for rules repositories
 REPOS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "rules_repositories")
 os.makedirs(REPOS_DIR, exist_ok=True)
 
-def get_windows_host_ip():
-    """Fetches the IP address of the Windows Host from inside WSL to connect to Windows services."""
-    try:
-        # Check default route in Linux to find the hyper-v network gateway IP
-        result = subprocess.run(
-            ["ip", "route"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True
-        )
-        for line in result.stdout.splitlines():
-            if "default" in line:
-                parts = line.split()
-                if len(parts) >= 3:
-                    return parts[2]
-    except Exception as e:
-        print(f"Could not determine Windows host IP from WSL: {e}")
-    return "localhost"
-
-# Resolve Ollama configuration
-OLLAMA_HOST = os.getenv("OLLAMA_HOST") or get_windows_host_ip()
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "all-minilm")
 print(f"Ollama Service Target: http://{OLLAMA_HOST}:11434 (Model: {OLLAMA_MODEL})")
-
-def get_ollama_embedding(text, model=OLLAMA_MODEL, host=OLLAMA_HOST):
-    """Generates a 384-dimensional vector embedding using the local Ollama service on Windows."""
-    # Truncate prompt to 500 characters to prevent context window overflow (HTTP 500 errors) in Ollama
-    truncated_text = text[:500] if text else ""
-    url = f"http://{host}:11434/api/embeddings"
-    payload = {
-        "model": model,
-        "prompt": truncated_text
-    }
-    try:
-        response = requests.post(url, json=payload, timeout=30)
-        response.raise_for_status()
-        return response.json()["embedding"]
-    except Exception as e:
-        print(f"\n[ERROR] Failed to query Ollama API at {url}")
-        print("Please ensure:")
-        print("1. Ollama is running on your Windows machine.")
-        print("2. You downloaded the model using: 'ollama pull all-minilm'")
-        print("3. Ollama is configured to accept network connections by setting the environment variable")
-        print("   OLLAMA_HOST=0.0.0.0 on Windows before launching Ollama Desktop.")
-        raise e
 
 def run_git_command(args, cwd=None):
     """Helper to run a git command in a specific directory."""
@@ -520,6 +478,15 @@ def process_and_load_rules():
     db_cursor.close()
     db_conn.close()
     print(f"\n=== Ingestion Completed! Total successfully loaded rules: {total_inserted} ===")
+    
+    # Update last sync timestamp file in the root directory
+    try:
+        last_sync_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".last_sync")
+        with open(last_sync_path, "w", encoding="utf-8") as f:
+            f.write(datetime.utcnow().isoformat())
+        print(f"Timestamp recorded to: {os.path.abspath(last_sync_path)}")
+    except Exception as env_err:
+        print(f"[WARNING] Could not update .last_sync file: {env_err}")
 
 if __name__ == "__main__":
     process_and_load_rules()

@@ -1,9 +1,8 @@
 import os
 import json
-import yaml
-import requests
 import subprocess
-from fastapi import FastAPI, HTTPException, Query
+import sys
+from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -15,7 +14,7 @@ from sigma.backends.splunk import SplunkBackend
 from sigma.backends.kusto import KustoBackend
 from sigma.backends.elasticsearch import LuceneBackend
 
-from database import get_db_connection
+from database import get_db_connection, get_ollama_embedding as db_get_ollama_embedding, OLLAMA_HOST, OLLAMA_MODEL
 
 app = FastAPI(title="Cyber Security Detection Rule Database", version="1.0.0")
 
@@ -28,40 +27,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def get_windows_host_ip():
-    """Fetches the IP address of the Windows Host from inside WSL to connect to Windows services."""
-    try:
-        # Check default route in Linux to find the Hyper-V network gateway IP
-        result = subprocess.run(
-            ["ip", "route"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True
-        )
-        for line in result.stdout.splitlines():
-            if "default" in line:
-                parts = line.split()
-                if len(parts) >= 3:
-                    return parts[2]
-    except Exception as e:
-        print(f"Could not determine Windows host IP from WSL: {e}")
-    return "localhost"
-
-# Resolve Ollama configuration
-OLLAMA_HOST = os.getenv("OLLAMA_HOST") or get_windows_host_ip()
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "all-minilm")
 print(f"FastAPI Ollama Service Target: http://{OLLAMA_HOST}:11434 (Model: {OLLAMA_MODEL})")
 
-def get_ollama_embedding(text, model=OLLAMA_MODEL, host=OLLAMA_HOST):
-    """Generates a 384-dimensional vector embedding using the local Ollama service on Windows."""
-    url = f"http://{host}:11434/api/embeddings"
-    payload = {
-        "model": model,
-        "prompt": text
-    }
+def get_ollama_embedding(text):
+    """Wraps database get_ollama_embedding and handles API status exceptions."""
     try:
-        response = requests.post(url, json=payload, timeout=10)
-        response.raise_for_status()
-        return response.json()["embedding"]
+        return db_get_ollama_embedding(text)
     except Exception as e:
-        print(f"[ERROR] Failed to query Ollama API at {url}")
         raise HTTPException(
             status_code=503, 
             detail="Local Ollama embedding service is unreachable. Ensure Ollama is running with OLLAMA_HOST=0.0.0.0 set."
@@ -117,6 +89,22 @@ def get_stats():
         cur.close()
         conn.close()
 
+def _row_to_dict(r, score_key="score"):
+    """Maps a PostgreSQL query tuple result to a standardized rule dictionary."""
+    return {
+        "id": r[0],
+        "name": r[1],
+        "type": r[2],
+        "title": r[3],
+        "description": r[4],
+        "level": r[5],
+        "author": r[6],
+        "tags": r[7],
+        "source_repo": r[8],
+        "created_at": r[9],
+        score_key: float(r[10])
+    }
+
 @app.get("/api/rules")
 def search_rules(
     q: Optional[str] = Query(None, description="Search keyword, exact phrase, or natural language query"),
@@ -164,12 +152,7 @@ def search_rules(
             """
             cur.execute(query_sql, filter_params + [f"%{q}%", f"%{q}%", f"%{q}%", limit, offset])
             
-            results = [{
-                "id": r[0], "name": r[1], "type": r[2], "title": r[3],
-                "description": r[4], "level": r[5], "author": r[6],
-                "tags": r[7], "source_repo": r[8], "created_at": r[9], "score": float(r[10])
-            } for r in cur.fetchall()]
-            
+            results = [_row_to_dict(r) for r in cur.fetchall()]
             return results
             
         # 2. LEXICAL SEARCH
@@ -202,12 +185,7 @@ def search_rules(
                 """
                 cur.execute(query_sql, [q] + filter_params + [q, limit, offset])
                 
-            results = [{
-                "id": r[0], "name": r[1], "type": r[2], "title": r[3],
-                "description": r[4], "level": r[5], "author": r[6],
-                "tags": r[7], "source_repo": r[8], "created_at": r[9], "score": float(r[10])
-            } for r in cur.fetchall()]
-            
+            results = [_row_to_dict(r) for r in cur.fetchall()]
             return results
             
         # 3. SEMANTIC SEARCH
@@ -230,12 +208,7 @@ def search_rules(
             """
             cur.execute(query_sql, [query_vector] + filter_params + [query_vector, limit, offset])
             
-            results = [{
-                "id": r[0], "name": r[1], "type": r[2], "title": r[3],
-                "description": r[4], "level": r[5], "author": r[6],
-                "tags": r[7], "source_repo": r[8], "created_at": r[9], "score": float(r[10])
-            } for r in cur.fetchall()]
-            
+            results = [_row_to_dict(r) for r in cur.fetchall()]
             return results
             
         # 4. HYBRID SEARCH (Deduplicated fusion)
@@ -258,11 +231,7 @@ def search_rules(
                 LIMIT %s;
             """
             cur.execute(lex_sql, [q] + filter_params + [q, hybrid_limit])
-            lex_results = {r[0]: {
-                "id": r[0], "name": r[1], "type": r[2], "title": r[3],
-                "description": r[4], "level": r[5], "author": r[6],
-                "tags": r[7], "source_repo": r[8], "created_at": r[9], "lex_score": float(r[10])
-            } for r in cur.fetchall()}
+            lex_results = {r[0]: _row_to_dict(r, "lex_score") for r in cur.fetchall()}
             
             # Fetch candidates from Semantic
             query_vector = get_ollama_embedding(q)
@@ -279,11 +248,7 @@ def search_rules(
                 LIMIT %s;
             """
             cur.execute(sem_sql, [query_vector] + filter_params + [query_vector, hybrid_limit])
-            sem_results = {r[0]: {
-                "id": r[0], "name": r[1], "type": r[2], "title": r[3],
-                "description": r[4], "level": r[5], "author": r[6],
-                "tags": r[7], "source_repo": r[8], "created_at": r[9], "sem_score": float(r[10])
-            } for r in cur.fetchall()}
+            sem_results = {r[0]: _row_to_dict(r, "sem_score") for r in cur.fetchall()}
             
             # Normalize lexical scores to [0, 1] range to combine with cosine similarity
             max_lex = max([r["lex_score"] for r in lex_results.values()]) if lex_results else 1.0
@@ -372,6 +337,11 @@ def get_rule_detail(rule_id: str):
         cur.close()
         conn.close()
 
+# Global pySigma backends initialized once to prevent request overhead
+splunk_backend = SplunkBackend()
+kusto_backend = KustoBackend()
+lucene_backend = LuceneBackend()
+
 @app.post("/api/rules/translate")
 def translate_rule(req: TranslationRequest):
     """Translates a raw Sigma YAML rule to Splunk, Elastic, or Sentinel (KQL) formats."""
@@ -380,21 +350,174 @@ def translate_rule(req: TranslationRequest):
         
         target = req.target.lower().strip()
         if target == "splunk":
-            backend = SplunkBackend()
-            converted = backend.convert(rule)
+            converted = splunk_backend.convert(rule)
             return {"query": converted[0] if converted else ""}
         elif target == "sentinel" or target == "kusto":
-            backend = KustoBackend()
-            converted = backend.convert(rule)
+            converted = kusto_backend.convert(rule)
             return {"query": converted[0] if converted else ""}
         elif target == "elastic" or target == "elasticsearch":
-            backend = LuceneBackend()
-            converted = backend.convert(rule)
+            converted = lucene_backend.convert(rule)
             return {"query": converted[0] if converted else ""}
         else:
             raise HTTPException(status_code=400, detail=f"SIEM backend '{target}' is not supported.")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"SIEM Translation failed: {str(e)}")
+
+# --- Rule Tagging & Sources Config Extension ---
+
+class UpdateTagsRequest(BaseModel):
+    tags: List[str]
+
+class AddSourceRequest(BaseModel):
+    name: str
+    type: str
+    repo_url: str
+    relative_rules_path: str
+    target_extensions: List[str]
+
+# Global sync status tracker
+sync_status = {"status": "idle", "message": "No sync in progress"}
+
+def run_ingest_process_bg():
+    global sync_status
+    sync_status = {"status": "running", "message": "Starting rule repository synchronization..."}
+    try:
+        python_exe = sys.executable
+        ingest_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ingest.py")
+        env = os.environ.copy()
+        
+        # Start ingest subprocess
+        process = subprocess.Popen(
+            [python_exe, ingest_script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env
+        )
+        stdout, stderr = process.communicate()
+        
+        if process.returncode == 0:
+            sync_status = {"status": "success", "message": "Rule database synchronization completed successfully!"}
+        else:
+            error_msg = stderr.strip() if stderr else stdout.strip()
+            sync_status = {"status": "error", "message": f"Sync failed: {error_msg}"}
+            print(f"[ERROR] Sync process failed: {error_msg}")
+    except Exception as e:
+        sync_status = {"status": "error", "message": f"Unexpected error during sync: {str(e)}"}
+        print(f"[ERROR] Sync exception: {str(e)}")
+
+@app.post("/api/rules/{rule_id}/tags")
+def update_rule_tags(rule_id: str, req: UpdateTagsRequest):
+    """Updates the manual tags for a specific rule."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        # Check if rule exists
+        cur.execute("SELECT id FROM rules WHERE id = %s;", (rule_id,))
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail="Rule not found")
+            
+        # Update tags
+        tags_json = json.dumps(req.tags)
+        cur.execute("""
+            UPDATE rules 
+            SET tags = %s::jsonb, updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s;
+        """, (tags_json, rule_id))
+        conn.commit()
+        return {"status": "success", "tags": req.tags}
+    except Exception as e:
+        conn.rollback()
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cur.close()
+        conn.close()
+
+SOURCES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sources.json")
+
+@app.get("/api/sources")
+def get_sources():
+    """Returns the list of configured rule repositories."""
+    try:
+        if not os.path.exists(SOURCES_FILE):
+            return []
+        with open(SOURCES_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read sources: {str(e)}")
+
+@app.post("/api/sources")
+def add_source(req: AddSourceRequest):
+    """Adds a new rule repository configuration."""
+    try:
+        sources = []
+        if os.path.exists(SOURCES_FILE):
+            with open(SOURCES_FILE, "r", encoding="utf-8") as f:
+                sources = json.load(f)
+                
+        for s in sources:
+            if s["name"].strip().lower() == req.name.strip().lower():
+                raise HTTPException(status_code=400, detail=f"Source with name '{req.name}' already exists.")
+                
+        new_source = {
+            "name": req.name.strip(),
+            "type": req.type.strip(),
+            "repo_url": req.repo_url.strip(),
+            "relative_rules_path": req.relative_rules_path.strip(),
+            "target_extensions": [ext.strip() for ext in req.target_extensions if ext.strip()]
+        }
+        sources.append(new_source)
+        
+        with open(SOURCES_FILE, "w", encoding="utf-8") as f:
+            json.dump(sources, f, indent=2, ensure_ascii=False)
+            
+        return sources
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(status_code=500, detail=f"Failed to save source: {str(e)}")
+
+@app.delete("/api/sources/{name}")
+def delete_source(name: str):
+    """Deletes a rule repository configuration by name."""
+    try:
+        if not os.path.exists(SOURCES_FILE):
+            raise HTTPException(status_code=404, detail="Sources file not found")
+            
+        with open(SOURCES_FILE, "r", encoding="utf-8") as f:
+            sources = json.load(f)
+            
+        filtered_sources = [s for s in sources if s["name"].strip().lower() != name.strip().lower()]
+        
+        if len(filtered_sources) == len(sources):
+            raise HTTPException(status_code=404, detail=f"Source with name '{name}' not found")
+            
+        with open(SOURCES_FILE, "w", encoding="utf-8") as f:
+            json.dump(filtered_sources, f, indent=2, ensure_ascii=False)
+            
+        return filtered_sources
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(status_code=500, detail=f"Failed to delete source: {str(e)}")
+
+@app.post("/api/sources/sync")
+def start_sync(background_tasks: BackgroundTasks):
+    """Triggers the rule ingestion process in the background."""
+    global sync_status
+    if sync_status["status"] == "running":
+        return {"status": "already_running", "message": "Sync is already in progress."}
+        
+    background_tasks.add_task(run_ingest_process_bg)
+    return {"status": "started", "message": "Rule ingestion started in background."}
+
+@app.get("/api/sources/sync/status")
+def get_sync_status():
+    """Returns current status of the background ingestion sync."""
+    global sync_status
+    return sync_status
 
 # Serve Static files for UI
 static_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
