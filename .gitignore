@@ -1,0 +1,32 @@
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+.venv_linux/
+venv/
+env/
+
+# Rule repositories local storage (heavy sparse-checkout folders)
+rules_repositories/
+
+# Local configuration files (contains sensitive ports & passwords)
+.env
+
+# IDE and Editor configs
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# OS generated files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store

@@ -1,0 +1,11 @@
+fastapi>=0.100.0
+uvicorn>=0.22.0
+psycopg2-binary>=2.9.6
+pyyaml>=6.0
+tomli>=2.0.1
+pysigma>=0.10.8
+pysigma-backend-splunk>=1.0.2
+pysigma-backend-kusto>=1.0.1
+pysigma-backend-elasticsearch>=1.0.3
+requests>=2.31.0
+pydantic>=2.0.0
