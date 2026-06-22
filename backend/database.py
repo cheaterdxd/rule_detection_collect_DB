@@ -1,52 +1,11 @@
 import os
-import psycopg2
-import requests
 import subprocess
+import psycopg2
 from psycopg2.extras import RealDictCursor
+import ollama
 
-def get_windows_host_ip():
-    """Fetches the IP address of the Windows Host from inside WSL to connect to Windows services."""
-    try:
-        # Check default route in Linux to find the Hyper-V network gateway IP
-        result = subprocess.run(
-            ["ip", "route"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True
-        )
-        for line in result.stdout.splitlines():
-            if "default" in line:
-                parts = line.split()
-                if len(parts) >= 3:
-                    return parts[2]
-    except Exception as e:
-        print(f"Could not determine Windows host IP from WSL: {e}")
-    return "localhost"
 
-# Resolve Ollama configuration
-OLLAMA_HOST = os.getenv("OLLAMA_HOST") or get_windows_host_ip()
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "all-minilm")
-
-def get_ollama_embedding(text, model=OLLAMA_MODEL, host=OLLAMA_HOST):
-    """Generates a 384-dimensional vector embedding using the local Ollama service on Windows."""
-    # Truncate prompt to 500 characters to prevent context window overflow (HTTP 500 errors) in Ollama
-    truncated_text = text[:500] if text else ""
-    url = f"http://{host}:11434/api/embeddings"
-    payload = {
-        "model": model,
-        "prompt": truncated_text
-    }
-    try:
-        response = requests.post(url, json=payload, timeout=30)
-        response.raise_for_status()
-        return response.json()["embedding"]
-    except Exception as e:
-        print(f"\n[ERROR] Failed to query Ollama API at {url}")
-        print("Please ensure:")
-        print("1. Ollama is running on your Windows machine.")
-        print("2. You downloaded the model using: 'ollama pull all-minilm'")
-        print("3. Ollama is configured to accept network connections by setting the environment variable")
-        print("   OLLAMA_HOST=0.0.0.0 on Windows before launching Ollama Desktop.")
-        raise e
-
-def load_env():
+def _load_env():
     """Loads environment variables from a local .env file if it exists."""
     for path in [".env", "backend/.env", "../.env"]:
         if os.path.exists(path):
@@ -54,16 +13,119 @@ def load_env():
                 for line in f:
                     line = line.strip()
                     if "=" in line and not line.startswith("#"):
-                        parts = line.split("=", 1)
-                        if len(parts) == 2:
-                            k, v = parts
-                            k = k.strip()
-                            v = v.strip().strip('"').strip("'").strip()
-                            if k not in os.environ:
-                                os.environ[k] = v
+                        k, v = line.split("=", 1)
+                        k = k.strip()
+                        v = v.strip().strip('"').strip("'").strip()
+                        if k not in os.environ:
+                            os.environ[k] = v
             break
 
-load_env()
+
+_load_env()
+
+
+def _get_wsl_gateway_ip() -> str:
+    """Returns the Windows host IP as seen from WSL2 via the default route."""
+    try:
+        result = subprocess.run(
+            ["ip", "route"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        for line in result.stdout.splitlines():
+            if "default" in line:
+                parts = line.split()
+                if len(parts) >= 3:
+                    return parts[2]
+    except Exception:
+        pass
+    return ""
+
+
+def _candidate_hosts() -> list[str]:
+    """
+    Returns a priority-ordered list of Ollama host addresses to try.
+    Handles the common case where OLLAMA_HOST=0.0.0.0 is set (bind address,
+    not a routable destination).
+    """
+    raw = os.getenv("OLLAMA_HOST", "").strip().strip('"').strip("'")
+
+    # Strip protocol if present
+    for prefix in ("http://", "https://"):
+        if raw.lower().startswith(prefix):
+            raw = raw[len(prefix):]
+
+    # If empty, wildcard, or localhost — use the standard fallback chain
+    if not raw or raw.startswith("0.0.0.0"):
+        candidates = ["127.0.0.1", "localhost"]
+        gw = _get_wsl_gateway_ip()
+        if gw:
+            candidates.append(gw)
+        return candidates
+
+    # If a specific host:port was given, use it first then fall back
+    base = raw.split(":")[0]
+    return [base, "127.0.0.1", "localhost"]
+
+
+def _build_host_url(addr: str) -> str:
+    """Ensures the address has a port suffix for the Ollama SDK."""
+    if ":" in addr:
+        return f"http://{addr}"
+    return f"http://{addr}:11434"
+
+
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "all-minilm")
+
+# Resolved at startup — first reachable host wins
+_OLLAMA_HOST_URL: str | None = None
+
+
+def _resolve_ollama_host() -> str:
+    """
+    Tries each candidate address in order and returns the first one that
+    responds to a lightweight /api/tags call via the official SDK.
+    Raises RuntimeError if none succeed.
+    """
+    global _OLLAMA_HOST_URL
+    if _OLLAMA_HOST_URL is not None:
+        return _OLLAMA_HOST_URL
+
+    candidates = _candidate_hosts()
+    for addr in candidates:
+        url = _build_host_url(addr)
+        try:
+            client = ollama.Client(host=url)
+            client.list()  # lightweight ping — returns installed model list
+            _OLLAMA_HOST_URL = url
+            print(f"[Ollama] Connected at {url}")
+            return url
+        except Exception:
+            pass
+
+    tried = ", ".join(_build_host_url(a) for a in candidates)
+    raise RuntimeError(
+        f"\n[ERROR] Could not connect to Ollama at any of: {tried}\n"
+        "Please ensure:\n"
+        "  1. Ollama Desktop is running (or `ollama serve` is active).\n"
+        "  2. The model is downloaded: ollama pull all-minilm\n"
+        "  3. On Windows, OLLAMA_HOST should be set to 0.0.0.0 so WSL can reach it.\n"
+    )
+
+
+def get_ollama_embedding(text: str) -> list[float]:
+    """
+    Returns a 384-dimensional embedding vector using the official Ollama SDK.
+    Automatically discovers the correct host via fallback chain.
+    """
+    truncated = text[:500] if text else ""
+    host_url = _resolve_ollama_host()
+    client = ollama.Client(host=host_url)
+    response = client.embeddings(model=OLLAMA_MODEL, prompt=truncated)
+    return response["embedding"]
+
+
+# ---------------------------------------------------------------------------
+# Database configuration
+# ---------------------------------------------------------------------------
 
 DB_HOST = os.getenv("DB_HOST", "localhost")
 DB_PORT = os.getenv("DB_PORT", "5432")
@@ -71,24 +133,23 @@ DB_NAME = os.getenv("DB_NAME", "rule_db")
 DB_USER = os.getenv("DB_USER", "postgres")
 DB_PASS = os.getenv("DB_PASS", "postgres")
 
+
 def get_db_connection():
-    conn = psycopg2.connect(
+    return psycopg2.connect(
         host=DB_HOST,
         port=DB_PORT,
         database=DB_NAME,
         user=DB_USER,
-        password=DB_PASS
+        password=DB_PASS,
     )
-    return conn
+
 
 def init_db():
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        # Enable pgvector extension
         cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
-        
-        # Create rules table
+
         cur.execute("""
             CREATE TABLE IF NOT EXISTS rules (
                 id VARCHAR(255) PRIMARY KEY,
@@ -108,22 +169,20 @@ def init_db():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
-        
-        # Create generated tsvector column for Full-Text Search
-        # We do this conditionally in case it already exists
+
         cur.execute("""
             DO $$
             BEGIN
                 IF NOT EXISTS (
-                    SELECT 1 
-                    FROM information_schema.columns 
+                    SELECT 1
+                    FROM information_schema.columns
                     WHERE table_name='rules' AND column_name='search_vector'
                 ) THEN
-                    ALTER TABLE rules ADD COLUMN search_vector tsvector 
+                    ALTER TABLE rules ADD COLUMN search_vector tsvector
                     GENERATED ALWAYS AS (
-                        to_tsvector('english', 
-                            coalesce(title, '') || ' ' || 
-                            coalesce(description, '') || ' ' || 
+                        to_tsvector('english',
+                            coalesce(title, '') || ' ' ||
+                            coalesce(description, '') || ' ' ||
                             coalesce(normalized_text, '')
                         )
                     ) STORED;
@@ -131,22 +190,20 @@ def init_db():
             END
             $$;
         """)
-        
-        # Create GIN index for full-text search
+
         cur.execute("CREATE INDEX IF NOT EXISTS rules_search_idx ON rules USING gin(search_vector);")
-        
-        # Create HNSW index for pgvector (uses cosine distance)
         cur.execute("CREATE INDEX IF NOT EXISTS rules_embedding_hnsw_idx ON rules USING hnsw (embedding vector_cosine_ops);")
-        
+
         conn.commit()
         print("Database initialized successfully with FTS and HNSW Vector indexes.")
     except Exception as e:
         conn.rollback()
         print(f"Error initializing database: {e}")
-        raise e
+        raise
     finally:
         cur.close()
         conn.close()
+
 
 if __name__ == "__main__":
     init_db()

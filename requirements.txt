@@ -9,3 +9,4 @@ pysigma-backend-kusto>=1.0.1
 pysigma-backend-elasticsearch>=1.0.3
 requests>=2.31.0
 pydantic>=2.0.0
+ollama>=0.2.0
