@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rule Detection Database</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <!-- FontAwesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="glow-bg"></div>
+    <div class="app-container">
+        
+        <!-- Header / Stats Bar -->
+        <header class="app-header">
+            <div class="header-logo">
+                <i class="fa-solid fa-shield-halved logo-icon"></i>
+                <div class="logo-text">
+                    <h1>Rule Detection Database</h1>
+                    <span>Detection-as-Code Rule Hub</span>
+                </div>
+            </div>
+            
+            <div class="stats-container">
+                <div class="stat-card" data-type="all">
+                    <span class="stat-num" id="stat-total">-</span>
+                    <span class="stat-label">Total Rules</span>
+                </div>
+                <div class="stat-card" data-type="Sigma">
+                    <span class="stat-num" id="stat-sigma">-</span>
+                    <span class="stat-label"><span class="badge sigma-badge">Sigma</span></span>
+                </div>
+                <div class="stat-card" data-type="Yara">
+                    <span class="stat-num" id="stat-yara">-</span>
+                    <span class="stat-label"><span class="badge yara-badge">YARA</span></span>
+                </div>
+                <div class="stat-card" data-type="Elastic">
+                    <span class="stat-num" id="stat-elastic">-</span>
+                    <span class="stat-label"><span class="badge elastic-badge">Elastic</span></span>
+                </div>
+                <div class="stat-card" data-type="KQL">
+                    <span class="stat-num" id="stat-kql">-</span>
+                    <span class="stat-label"><span class="badge kql-badge">KQL</span></span>
+                </div>
+            </div>
+            
+            <button type="button" id="settings-btn" class="btn-secondary" style="height: fit-content; padding: 10px 18px; display: flex; align-items: center; gap: 8px;">
+                <i class="fa-solid fa-sliders"></i> Settings
+            </button>
+        </header>
+
+        <!-- Main Workspace -->
+        <main class="main-workspace">
+            
+            <!-- Search & Controls Section -->
+            <section class="search-section">
+                <div class="search-bar-container">
+                    <i class="fa-solid fa-magnifying-glass search-icon"></i>
+                    <input type="text" id="search-input" placeholder='Enter keywords, phrases e.g. "lsass.exe", or ask natural questions...' autocomplete="off">
+                    <button type="button" id="search-btn" class="btn-primary">Search</button>
+                </div>
+                
+                <div class="search-options">
+                    <span class="option-label">Search Mode:</span>
+                    <div class="mode-toggles">
+                        <button type="button" class="mode-btn active" data-mode="hybrid">
+                            <i class="fa-solid fa-wand-magic-sparkles"></i> Hybrid Search
+                        </button>
+                        <button type="button" class="mode-btn" data-mode="semantic">
+                            <i class="fa-solid fa-brain"></i> AI Semantic (RAG)
+                        </button>
+                        <button type="button" class="mode-btn" data-mode="lexical">
+                            <i class="fa-solid fa-keyboard"></i> Keyword Match
+                        </button>
+                        <button type="button" class="mode-btn" data-mode="raw">
+                            <i class="fa-solid fa-code"></i> Raw Code Search
+                        </button>
+                    </div>
+                </div>
+            </section>
+            
+            <div class="content-layout">
+                <!-- Sidebar Filters -->
+                <aside class="sidebar-filters">
+                    <div class="filter-group">
+                        <h3><i class="fa-solid fa-tags"></i> Rule Type</h3>
+                        <div class="filter-options" id="type-filters">
+                            <label class="custom-checkbox">
+                                <input type="checkbox" value="Sigma" checked>
+                                <span class="checkmark"></span> Sigma Rules
+                            </label>
+                            <label class="custom-checkbox">
+                                <input type="checkbox" value="Yara" checked>
+                                <span class="checkmark"></span> YARA Rules
+                            </label>
+                            <label class="custom-checkbox">
+                                <input type="checkbox" value="Elastic" checked>
+                                <span class="checkmark"></span> Elastic Rules
+                            </label>
+                            <label class="custom-checkbox">
+                                <input type="checkbox" value="KQL" checked>
+                                <span class="checkmark"></span> Sentinel KQL
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <div class="filter-group">
+                        <h3><i class="fa-solid fa-circle-exclamation"></i> Severity Level</h3>
+                        <div class="filter-options" id="level-filters">
+                            <label class="custom-checkbox text-critical">
+                                <input type="checkbox" value="critical" checked>
+                                <span class="checkmark"></span> Critical
+                            </label>
+                            <label class="custom-checkbox text-high">
+                                <input type="checkbox" value="high" checked>
+                                <span class="checkmark"></span> High
+                            </label>
+                            <label class="custom-checkbox text-medium">
+                                <input type="checkbox" value="medium" checked>
+                                <span class="checkmark"></span> Medium
+                            </label>
+                            <label class="custom-checkbox text-low">
+                                <input type="checkbox" value="low" checked>
+                                <span class="checkmark"></span> Low / Informational
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <div class="filter-group">
+                        <h3><i class="fa-solid fa-fire"></i> Popular Threat Tags</h3>
+                        <div class="tag-cloud" id="popular-tags">
+                            <!-- Popular tag pills will populate here -->
+                            <span class="tag-loading">Loading tags...</span>
+                        </div>
+                    </div>
+                </aside>
+                
+                <!-- Rules Feed -->
+                <section class="rules-feed">
+                    <div class="feed-header">
+                        <span class="results-count" id="results-count">Showing 0 rules</span>
+                        <div class="sort-indicator" id="sort-indicator">Sorted by Hybrid Relevance Score</div>
+                    </div>
+                    
+                    <div class="rules-list" id="rules-list">
+                        <!-- Cards populate dynamically -->
+                        <div class="feed-placeholder">
+                            <i class="fa-solid fa-shield-halved pulse"></i>
+                            <p>Enter a query above to scan the ruleset</p>
+                        </div>
+                    </div>
+                    
+                    <div class="load-more-container" id="load-more-container" style="display: none;">
+                        <button type="button" id="load-more-btn" class="btn-secondary">
+                            <i class="fa-solid fa-angles-down"></i> Load More Rules
+                        </button>
+                    </div>
+                </section>
+            </div>
+        </main>
+        
+        <!-- Rule Inspector Modal -->
+        <div class="modal" id="rule-modal">
+            <div class="modal-content">
+                <header class="modal-header">
+                    <div class="modal-title-area">
+                        <span class="badge" id="modal-rule-type">Type</span>
+                        <h2 id="modal-rule-title">Rule Title</h2>
+                    </div>
+                    <button class="close-btn" id="close-modal-btn">&times;</button>
+                </header>
+                
+                <div class="modal-body">
+                    <div class="modal-meta-grid">
+                        <div class="meta-item">
+                            <span class="meta-label">Severity</span>
+                            <span class="level-pill" id="modal-rule-level">High</span>
+                        </div>
+                        <div class="meta-item">
+                            <span class="meta-label">Author</span>
+                            <span class="meta-val" id="modal-rule-author">Author</span>
+                        </div>
+                        <div class="meta-item">
+                            <span class="meta-label">Source Repository</span>
+                            <span class="meta-val" id="modal-rule-source">Repo Link</span>
+                        </div>
+                        <div class="meta-item full-width">
+                            <span class="meta-label">Tags</span>
+                            <div class="tags-editor-container">
+                                <div class="tags-container" id="modal-rule-tags">
+                                    <!-- Tags populate dynamically -->
+                                </div>
+                                <div class="tag-input-wrapper" style="margin-top: 8px; display: flex; gap: 8px;">
+                                    <input type="text" id="add-tag-input" placeholder="Add custom tag..." style="flex: 1; padding: 6px 12px; border: 1px solid var(--border-color); border-radius: 4px; font-size: 0.8rem; outline: none;">
+                                    <button type="button" id="add-tag-btn" class="btn-primary" style="padding: 6px 14px; font-size: 0.8rem;">Add</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="meta-item full-width">
+                            <span class="meta-label">Description</span>
+                            <p class="modal-description" id="modal-rule-desc">Rule description text.</p>
+                        </div>
+                    </div>
+                    
+                    <div class="code-viewer-container">
+                        <div class="code-header">
+                            <div class="code-tabs" id="code-tabs">
+                                <button class="tab-btn active" data-tab="raw">Raw Rule File</button>
+                                <button class="tab-btn" data-tab="splunk" id="tab-splunk">Splunk SPL</button>
+                                <button class="tab-btn" data-tab="elastic" id="tab-elastic">Elastic Query</button>
+                                <button class="tab-btn" data-tab="sentinel" id="tab-sentinel">Sentinel KQL</button>
+                            </div>
+                            <button class="copy-btn" id="copy-code-btn"><i class="fa-regular fa-copy"></i> Copy</button>
+                        </div>
+                        
+                        <div class="code-body">
+                            <pre><code id="code-display" class="fira-code">Loading rule content...</code></pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Settings Modal (Rule Sources and Sync) -->
+        <div class="modal" id="settings-modal">
+            <div class="modal-content" style="max-width: 800px; height: 90vh; margin-top: 5vh; border-radius: 8px;">
+                <header class="modal-header">
+                    <div class="modal-title-area">
+                        <i class="fa-solid fa-sliders logo-icon" style="font-size: 1.25rem; color: var(--accent-primary);"></i>
+                        <h2>Database Settings & Sources</h2>
+                    </div>
+                    <button class="close-btn" id="close-settings-btn">&times;</button>
+                </header>
+                
+                <div class="modal-body" style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 24px; padding: 24px; overflow-y: auto;">
+                    <!-- Left column: Current Sources List -->
+                    <div class="settings-column" style="display: flex; flex-direction: column; gap: 16px; height: 100%;">
+                        <h3 style="font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-primary); border-bottom: 1px solid var(--border-color); padding-bottom: 8px;">
+                            <i class="fa-solid fa-folder-open"></i> Rule Repositories
+                        </h3>
+                        <div class="sources-list" id="sources-list" style="display: flex; flex-direction: column; gap: 10px; max-height: 320px; overflow-y: auto; padding-right: 4px;">
+                            <!-- Configured sources list dynamically loaded -->
+                        </div>
+                        
+                        <!-- Sync Trigger Section -->
+                        <div class="sync-section" style="margin-top: auto; padding-top: 16px; border-top: 1px solid var(--border-color); display: flex; flex-direction: column; gap: 10px;">
+                            <button type="button" id="sync-now-btn" class="btn-primary" style="width: 100%; display: flex; justify-content: center; align-items: center; gap: 8px; padding: 12px 24px;">
+                                <i class="fa-solid fa-rotate"></i> Sync Repositories Now
+                            </button>
+                            <div id="sync-status-msg" style="font-size: 0.75rem; color: var(--text-muted); line-height: 1.4; padding: 10px; border-radius: 4px; background: var(--bg-body); border: 1px solid var(--border-color);">
+                                No sync in progress.
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Right column: Add New Source Form -->
+                    <div class="settings-column" style="display: flex; flex-direction: column; gap: 16px; border-left: 1px solid var(--border-color); padding-left: 24px;">
+                        <h3 style="font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-primary); border-bottom: 1px solid var(--border-color); padding-bottom: 8px;">
+                            <i class="fa-solid fa-plus-circle"></i> Add New Source
+                        </h3>
+                        <form id="add-source-form" style="display: flex; flex-direction: column; gap: 12px;">
+                            <div class="form-group" style="display: flex; flex-direction: column; gap: 4px;">
+                                <label style="font-size: 0.7rem; font-weight: 600; text-transform: uppercase; color: var(--text-muted);">Repository Name</label>
+                                <input type="text" id="source-name" placeholder="e.g. Neo23x0 Signature Base" required style="padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 4px; font-size: 0.85rem; outline: none; width: 100%;">
+                            </div>
+                            <div class="form-group" style="display: flex; flex-direction: column; gap: 4px;">
+                                <label style="font-size: 0.7rem; font-weight: 600; text-transform: uppercase; color: var(--text-muted);">Rule Format Type</label>
+                                <select id="source-type" required style="padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 4px; font-size: 0.85rem; outline: none; background: white; width: 100%;">
+                                    <option value="Sigma">Sigma (YAML)</option>
+                                    <option value="Yara">YARA (Text)</option>
+                                    <option value="Elastic">Elastic (TOML)</option>
+                                    <option value="KQL">Sentinel KQL (YAML/KQL)</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="display: flex; flex-direction: column; gap: 4px;">
+                                <label style="font-size: 0.7rem; font-weight: 600; text-transform: uppercase; color: var(--text-muted);">Git Repository URL</label>
+                                <input type="url" id="source-url" placeholder="https://github.com/username/repo.git" required style="padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 4px; font-size: 0.85rem; outline: none; width: 100%;">
+                            </div>
+                            <div class="form-group" style="display: flex; flex-direction: column; gap: 4px;">
+                                <label style="font-size: 0.7rem; font-weight: 600; text-transform: uppercase; color: var(--text-muted);">Relative Rules Path</label>
+                                <input type="text" id="source-rules-path" placeholder="e.g. rules (path inside repository)" required style="padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 4px; font-size: 0.85rem; outline: none; width: 100%;">
+                            </div>
+                            <div class="form-group" style="display: flex; flex-direction: column; gap: 4px;">
+                                <label style="font-size: 0.7rem; font-weight: 600; text-transform: uppercase; color: var(--text-muted);">Target Extensions (comma separated)</label>
+                                <input type="text" id="source-extensions" placeholder="e.g. .yml, .yaml" required style="padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 4px; font-size: 0.85rem; outline: none; width: 100%;">
+                            </div>
+                            <button type="submit" class="btn-primary" style="margin-top: 8px; width: 100%;">
+                                <i class="fa-solid fa-save"></i> Save Repository Source
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+    
+    <script src="app.js"></script>
+</body>
+</html>
