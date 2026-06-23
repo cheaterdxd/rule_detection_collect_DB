@@ -1,4 +1,4 @@
-# Rule Detection Database V2 — Windows Setup Script
+# Rule Detection Database V2 - Windows Setup Script
 # No Docker, No Ollama service required.
 # Run in PowerShell (Administrator recommended for winget installs).
 
@@ -10,7 +10,7 @@ function Write-WarningMsg([string]$text) { Write-Host "[!] $text" -ForegroundCol
 function Write-ErrorMsg([string]$text) { Write-Host "[ERROR] $text" -ForegroundColor Red }
 
 Write-Header "Rule Detection Database V2 Setup (SQLite + fastembed)"
-Write-Host "No Docker or Ollama required — lightweight local stack." -ForegroundColor Magenta
+Write-Host "No Docker or Ollama required - lightweight local stack." -ForegroundColor Magenta
 
 if ([Environment]::OSVersion.Platform -ne "Win32NT") {
     Write-ErrorMsg "This script is for Windows. For Linux/WSL, run setup.sh instead."
@@ -24,7 +24,7 @@ Write-Success "Windows Host detected."
 Write-Header "Checking System Dependencies"
 
 if (!(Get-Command git -ErrorAction SilentlyContinue)) {
-    Write-WarningMsg "Git not found — installing via winget..."
+    Write-WarningMsg "Git not found. Installing via winget..."
     winget install --id Git.Git -e --silent --accept-source-agreements --accept-package-agreements
     Write-Success "Git installed."
 } else {
@@ -32,9 +32,11 @@ if (!(Get-Command git -ErrorAction SilentlyContinue)) {
 }
 
 if (!(Get-Command python -ErrorAction SilentlyContinue)) {
-    Write-WarningMsg "Python not found — installing Python 3.11 via winget..."
+    Write-WarningMsg "Python not found. Installing Python 3.11 via winget..."
     winget install --id Python.Python.3.11 -e --silent --accept-source-agreements --accept-package-agreements
-    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+    $machinePath = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
+    $userPath    = [System.Environment]::GetEnvironmentVariable("Path", "User")
+    $env:Path = $machinePath + ";" + $userPath
     Write-Success "Python 3.11 installed."
 } else {
     Write-Success "Python: $((python --version 2>&1).Trim())"
@@ -55,9 +57,10 @@ function Get-NextFreePort([int]$startPort) {
 }
 
 $defaultAppPort = 8000
-if ([System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() | Where-Object { $_.Port -eq $defaultAppPort }) {
+$listeners = [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners()
+if ($listeners | Where-Object { $_.Port -eq $defaultAppPort }) {
     $appPort = Get-NextFreePort ($defaultAppPort + 1)
-    Write-WarningMsg "Port $defaultAppPort in use — allocated port $appPort instead."
+    Write-WarningMsg "Port $defaultAppPort in use. Allocated port $appPort instead."
 } else {
     $appPort = $defaultAppPort
     Write-Success "Port $appPort available."
@@ -107,7 +110,7 @@ $modelScript = @'
 from fastembed import TextEmbedding
 model = TextEmbedding("sentence-transformers/all-MiniLM-L6-v2")
 emb = list(model.embed(["warmup"]))
-print(f"OK:{len(emb[0].tolist())}")
+print("OK:" + str(len(emb[0].tolist())))
 '@
 $modelResult = & .venv\Scripts\python.exe -c $modelScript 2>&1
 if ($modelResult -like "OK:*") {
@@ -122,9 +125,9 @@ if ($modelResult -like "OK:*") {
 # 7. Rule ingestion
 # ---------------------------------------------------------------------------
 if (Test-Path "rule_db_backup.sql") {
-    Write-Header "Skipping ingestion — Backup file detected"
-    Write-WarningMsg "V2 uses SQLite. SQL backup from V1 (PostgreSQL) is not directly compatible."
-    Write-WarningMsg "Please run ingestion manually: .venv\Scripts\python.exe backend/ingest.py"
+    Write-Header "Skipping ingestion - Backup file detected"
+    Write-WarningMsg "V2 uses SQLite. SQL backup from V1 (PostgreSQL) is not compatible."
+    Write-WarningMsg "Run ingestion manually: .venv\Scripts\python.exe backend/ingest.py"
 } else {
     Write-Header "Starting Rule Ingestion"
     Write-Host "Pulling rules from GitHub and generating embeddings. This takes several minutes..." -ForegroundColor Yellow
@@ -137,22 +140,22 @@ if (Test-Path "rule_db_backup.sql") {
 # ---------------------------------------------------------------------------
 Write-Header "Post-Install Health Check"
 $healthScript = @'
-import sys, os
+import sys
 sys.path.insert(0, "backend")
 from database import get_db_connection
 try:
     conn = get_db_connection()
     count = conn.execute("SELECT COUNT(*) FROM rules").fetchone()[0]
     conn.close()
-    print(f"OK:{count}")
+    print("OK:" + str(count))
 except Exception as e:
-    print(f"FAIL:{e}")
+    print("FAIL:" + str(e))
     sys.exit(1)
 '@
 $healthResult = & .venv\Scripts\python.exe -c $healthScript 2>&1
 if ($healthResult -like "OK:*") {
     $ruleCount = ($healthResult -split ":")[1].Trim()
-    Write-Success "Database health check passed — $ruleCount rules ready."
+    Write-Success "Database health check passed - $ruleCount rules ready."
 } else {
     Write-ErrorMsg "Health check FAILED: $healthResult"
     exit 1
@@ -166,13 +169,15 @@ try {
     $taskName = "RuleDatabaseAutoUpdateV2"
     if (Test-Path "cron_sync.ps1") {
         $cronPath = Resolve-Path "cron_sync.ps1"
-        $trigger = New-ScheduledTaskTrigger -Daily -At "2:00 AM"
-        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$cronPath`""
+        $trigger  = New-ScheduledTaskTrigger -Daily -At "2:00 AM"
+        $action   = New-ScheduledTaskAction -Execute "powershell.exe" `
+                        -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$cronPath`""
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
-        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Force -ErrorAction SilentlyContinue | Out-Null
+        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
+            -Settings $settings -Force -ErrorAction SilentlyContinue | Out-Null
         Write-Success "Task Scheduler registered: '$taskName' (daily at 2:00 AM)."
     } else {
-        Write-WarningMsg "cron_sync.ps1 not found — skipping task scheduler registration."
+        Write-WarningMsg "cron_sync.ps1 not found. Skipping task scheduler registration."
     }
 } catch {
     Write-WarningMsg "Could not register Task Scheduler. Register manually if desired."
@@ -191,4 +196,4 @@ Write-Host "=== HOW TO START ===" -ForegroundColor Cyan
 Write-Host "  .venv\Scripts\python.exe backend/main.py" -ForegroundColor White
 Write-Host "  Then open: http://localhost:$appPort" -ForegroundColor White
 Write-Host ""
-Write-Host "Enjoy your lightweight offline Detection-as-Code database! — Antigravity Agent" -ForegroundColor Magenta
+Write-Host "Enjoy your lightweight offline Detection-as-Code database! - Antigravity Agent" -ForegroundColor Magenta
