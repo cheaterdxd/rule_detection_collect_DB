@@ -106,13 +106,15 @@ Write-Success "SQLite database initialized (rule_db.db)."
 # ---------------------------------------------------------------------------
 Write-Header "Pre-downloading Embedding Model (all-MiniLM-L6-v2)"
 Write-Host "This downloads ~46 MB ONNX model to local cache on first run..." -ForegroundColor Yellow
-$modelScript = @'
+$modelTmp = Join-Path $env:TEMP "v2_model_check.py"
+@'
 from fastembed import TextEmbedding
 model = TextEmbedding("sentence-transformers/all-MiniLM-L6-v2")
 emb = list(model.embed(["warmup"]))
 print("OK:" + str(len(emb[0].tolist())))
-'@
-$modelResult = & .venv\Scripts\python.exe -c $modelScript 2>&1
+'@ | Set-Content -Path $modelTmp -Encoding UTF8
+$modelResult = & .venv\Scripts\python.exe $modelTmp 2>&1
+Remove-Item $modelTmp -ErrorAction SilentlyContinue
 if ($modelResult -like "OK:*") {
     $dims = ($modelResult -split ":")[1].Trim()
     Write-Success "Embedding model ready ($dims dimensions)."
@@ -139,7 +141,8 @@ if (Test-Path "rule_db_backup.sql") {
 # 8. Post-install health check
 # ---------------------------------------------------------------------------
 Write-Header "Post-Install Health Check"
-$healthScript = @'
+$healthTmp = Join-Path $env:TEMP "v2_health_check.py"
+@'
 import sys
 sys.path.insert(0, "backend")
 from database import get_db_connection
@@ -151,8 +154,9 @@ try:
 except Exception as e:
     print("FAIL:" + str(e))
     sys.exit(1)
-'@
-$healthResult = & .venv\Scripts\python.exe -c $healthScript 2>&1
+'@ | Set-Content -Path $healthTmp -Encoding UTF8
+$healthResult = & .venv\Scripts\python.exe $healthTmp 2>&1
+Remove-Item $healthTmp -ErrorAction SilentlyContinue
 if ($healthResult -like "OK:*") {
     $ruleCount = ($healthResult -split ":")[1].Trim()
     Write-Success "Database health check passed - $ruleCount rules ready."
