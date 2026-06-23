@@ -168,24 +168,22 @@ if ($healthResult -like "OK:*") {
 # ---------------------------------------------------------------------------
 # 9. Register Task Scheduler (daily sync at 2 AM)
 # ---------------------------------------------------------------------------
-Write-Header "Registering Scheduled Rule Update Task"
-try {
-    $taskName = "RuleDatabaseAutoUpdateV2"
-    if (Test-Path "cron_sync.ps1") {
-        $cronPath = Resolve-Path "cron_sync.ps1"
-        $trigger  = New-ScheduledTaskTrigger -Daily -At "2:00 AM"
-        $action   = New-ScheduledTaskAction -Execute "powershell.exe" `
-                        -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$cronPath`""
-        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
-        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
-            -Settings $settings -Force -ErrorAction SilentlyContinue | Out-Null
-        Write-Success "Task Scheduler registered: '$taskName' (daily at 2:00 AM)."
-    } else {
-        Write-WarningMsg "cron_sync.ps1 not found. Skipping task scheduler registration."
-    }
-} catch {
-    Write-WarningMsg "Could not register Task Scheduler. Register manually if desired."
-}
+#Write-Header "Registering Scheduled Rule Update Task"
+#try {
+#    $taskName = "RuleDatabaseAutoUpdateV2"
+#    if (Test-Path "cron_sync.ps1") {
+#        $cronPath = Resolve-Path "cron_sync.ps1"
+#        $trigger = New-ScheduledTaskTrigger -Daily -At "2:00 AM"
+#        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$cronPath`""
+#        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+#        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Force -ErrorAction SilentlyContinue | Out-Null
+#        Write-Success "Task Scheduler registered: '$taskName' (daily at 2:00 AM)."
+#    } else {
+#        Write-WarningMsg "cron_sync.ps1 not found — skipping task scheduler registration."
+#    }
+#} catch {
+#    Write-WarningMsg "Could not register Task Scheduler. Register manually if desired."
+#}
 
 # ---------------------------------------------------------------------------
 # Summary
